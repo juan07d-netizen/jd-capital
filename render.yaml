@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: jd-capital
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: JD_ADMIN_USER
+        sync: false
+      - key: JD_ADMIN_PASSWORD
+        sync: false
+      - key: JD_SESSION_SECRET
+        sync: false
+      - key: JD_SCHEDULER_ENABLED
+        value: "false"
+      - key: JD_AUTO_SPEND_USD
+        value: "0"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jd-capital-db
+          property: connectionString
+
+  - type: cron
+    name: jd-capital-scout
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    schedule: "0 */6 * * *"
+    dockerCommand: "python worker.py"
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: JD_AUTO_SPEND_USD
+        value: "0"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jd-capital-db
+          property: connectionString
+
+databases:
+  - name: jd-capital-db
+    plan: free
+    databaseName: jdcapital
+    user: jdcapital
