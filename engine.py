@@ -1,6 +1,5 @@
-from .agents import run_pipeline
-from .config import MISSION
-from .db import add_opportunity, log_event
+from config import MISSION
+from db import add_opportunity, log_event
 
 def default_mission():
     return MISSION
@@ -8,8 +7,9 @@ def default_mission():
 async def run_mission_once(mission, source="manual"):
     log_event("mission_started", source)
     try:
+        from agents import run_pipeline
         report = await run_pipeline(mission)
-        add_opportunity("Mission result","portfolio",0,0,0,"pending_review",report)
+        add_opportunity("Mission result", "portfolio", 0, 0, 0, "pending_review", report)
         log_event("mission_finished", source)
         return report
     except Exception as exc:

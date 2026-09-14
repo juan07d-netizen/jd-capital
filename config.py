@@ -5,7 +5,7 @@ load_dotenv()
 MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 AUTO_SPEND_USD = float(os.getenv("JD_AUTO_SPEND_USD", "0"))
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 OBJECTIVE = """
 JD Capital is Juan's private wealth-building system.
 Maximize long-term net worth through legitimate, scalable and increasingly

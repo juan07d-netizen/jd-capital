@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime, timezone
-from .config import DATABASE_URL, ROOT
+from config import DATABASE_URL, ROOT
 
 def _sqlite():
     con = sqlite3.connect(ROOT / "data.sqlite3")

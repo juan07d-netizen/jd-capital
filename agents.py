@@ -1,6 +1,6 @@
 import os
 from agents import Agent, Runner, WebSearchTool, set_default_openai_key
-from .config import OBJECTIVE, MODEL
+from config import OBJECTIVE, MODEL
 
 key=os.getenv("OPENAI_API_KEY")
 if key:
