@@ -1,17 +1,11 @@
-from config import MISSION
-from db import add_opportunity, log_event
+from ai import run_research
+from db import save_run
 
-def default_mission():
-    return MISSION
-
-async def run_mission_once(mission, source="manual"):
-    log_event("mission_started", source)
+def run_mission(mission):
     try:
-        from agents import run_pipeline
-        report = await run_pipeline(mission)
-        add_opportunity("Mission result", "portfolio", 0, 0, 0, "pending_review", report)
-        log_event("mission_finished", source)
-        return report
+        result=run_research(mission)
+        save_run(mission,result,"success")
+        return result
     except Exception as exc:
-        log_event("mission_error", f"{type(exc).__name__}: {exc}")
+        save_run(mission,str(exc),"error")
         raise
