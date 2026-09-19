@@ -1,0 +1,25 @@
+JD CAPITAL 2.1
+
+ESTADO ACTUAL: núcleo validado; instalador Windows pendiente de build en Windows.
+
+Qué ya está validado aquí:
+- 7 pruebas automáticas pasan.
+- Migración de bases legacy verificada e idempotente.
+- Login y API local verificados.
+- Movimientos en centavos de USD verificados.
+- Error del proveedor de IA controlado sin romper el job.
+- Recuperación de un job con identificador de proveedor verificada.
+- Contraseña con Argon2id.
+- Clave de OpenAI preparada para almacenarse en el almacén de credenciales del sistema.
+- Investigación con Responses API + web_search + background preparada según la documentación actual.
+
+Qué NO hacer todavía:
+- No instalar una versión vieja.
+- No subir la clave de OpenAI a GitHub.
+- No usar el ZIP anterior como instalación definitiva.
+
+Próximo paso de release:
+1) Build PyInstaller en Windows.
+2) Compilar Inno Setup.
+3) Ejecutar smoke/acceptance test del instalador.
+4) Generar una única versión candidata para Juan.
