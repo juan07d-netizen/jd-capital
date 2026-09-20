@@ -11,14 +11,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           architecture: x64
+
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest pyinstaller
+
       - name: Run test suite
         run: python -m pytest -q
+
       - name: Build executable
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name JD-Capital `
@@ -27,15 +31,28 @@ jobs:
             --collect-all argon2 `
             --collect-all openai `
             main.py
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
+
       - name: Build installer
-        run: '& "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" JD-Capital.iss'
+        shell: powershell
+        run: |
+          $iscc = Join-Path $env:ChocolateyInstall "bin\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Error "No se encontró ISCC.exe en $iscc"
+          }
+          & $iscc "JD-Capital.iss"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
       - name: Generate SHA-256
         shell: powershell
         run: |
           $hash = (Get-FileHash installer/JD_Capital_Setup.exe -Algorithm SHA256).Hash
           Set-Content -Path installer/SHA256SUM.txt -Value $hash
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
