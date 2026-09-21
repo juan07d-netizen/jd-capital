@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -263,3 +265,73 @@ def test_windows_default_data_directory_uses_localappdata(monkeypatch):
     from jd_capital.config import default_data_dir
 
     assert default_data_dir() == root / "JD Capital"
+
+
+def run_dashboard_javascript(monkeypatch) -> dict:
+    fresh_env(monkeypatch)
+    from jd_capital import app as app_module
+
+    monkeypatch.setattr(app_module, "get_openai_api_key", lambda: "")
+    rendered = app_module.dashboard()
+    script = rendered.split("<script>", 1)[1].split("</script>", 1)[0]
+    harness = r"""
+const fs = require('fs');
+const source = fs.readFileSync(0, 'utf8');
+const elements = {};
+global.document = {getElementById(id) { return elements[id] ||= {value: '', textContent: '', innerHTML: '', className: ''}; }};
+const responses = {
+  '/api/metrics': {balance: 0, income: 0, expense: 0, net: 0},
+  '/api/transactions': {transactions: []},
+  '/api/opportunities': {opportunities: []},
+  '/api/runs': {runs: []},
+  '/api/settings': {configured: false},
+};
+const posts = [];
+global.fetch = async (url, opts = {}) => {
+  if (opts.method === 'POST') posts.push({url, body: JSON.parse(opts.body)});
+  return {ok: true, json: async () => responses[url] || {ok: true}};
+};
+const alerts = [];
+global.alert = message => alerts.push(String(message));
+eval(source + '\nglobal.tx = tx; global.opp = opp;');
+(async () => {
+  await new Promise(resolve => setImmediate(resolve));
+  const element = id => document.getElementById(id);
+  element('kind').value = 'deposit'; element('amount').value = '1'; element('note').value = 'Prueba inicial';
+  await global.tx();
+  element('oname').value = 'Prueba'; element('platform').value = 'Test'; element('ostatus').value = 'investigar';
+  element('expected').value = '1'; element('source_url').value = ''; element('onote').value = 'Prueba inicial';
+  await global.opp();
+  process.stdout.write(JSON.stringify({posts, alerts}));
+})().catch(error => { console.error(error); process.exit(1); });
+"""
+    result = subprocess.run(
+        ["node", "-e", harness],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+    return json.loads(result.stdout)
+
+
+def test_transaction_form_javascript_posts_entered_values(monkeypatch):
+    result = run_dashboard_javascript(monkeypatch)
+    transaction = next(item for item in result["posts"] if item["url"] == "/api/transactions")
+    assert transaction["body"] == {"kind": "deposit", "amount": "1", "note": "Prueba inicial"}
+    assert result["alerts"] == []
+
+
+def test_opportunity_form_javascript_posts_entered_values(monkeypatch):
+    result = run_dashboard_javascript(monkeypatch)
+    opportunity = next(item for item in result["posts"] if item["url"] == "/api/opportunities")
+    assert opportunity["body"] == {
+        "name": "Prueba",
+        "platform": "Test",
+        "status": "investigar",
+        "expected_usd": "1",
+        "note": "Prueba inicial",
+        "source_url": "",
+    }
+    assert result["alerts"] == []
