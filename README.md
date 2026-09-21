@@ -32,8 +32,13 @@ Do not put a production OpenAI API key in source control. In the desktop applica
 Run:
 
 ```text
+python -m pip install -r requirements.lock
 python -m pytest -q
 ```
+
+`requirements.txt` defines the compatible dependency ranges. `requirements.lock`
+records the exact versions validated for the Windows release build and must be
+refreshed deliberately when dependencies are upgraded.
 
 The test suite covers persistence, idempotent migrations, legacy migration, HTTP login/API flow, the OpenAI background/web-search request contract, provider errors, and job recovery. It does not make a real paid API call.
 

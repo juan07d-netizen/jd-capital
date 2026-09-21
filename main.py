@@ -25,15 +25,34 @@ def free_port(preferred: int) -> int:
 def configure_logging() -> None:
     log_file = get_data_dir() / "jd_capital.log"
     logging.basicConfig(
-        filename=log_file,
+        filename=str(log_file),
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        encoding="utf-8",
+        force=True,
     )
     logging.getLogger(APP_NAME).info("Inicio de JD Capital")
+
+
+def run_server(port: int) -> None:
+    """Run Uvicorn without its console-oriented logging configuration.
+
+    A PyInstaller ``--windowed`` executable has no stdout/stderr streams.  The
+    Uvicorn default logging config inspects those streams with ``isatty()``, so
+    JD Capital owns logging and routes all server messages to jd_capital.log.
+    """
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        log_config=None,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":
     configure_logging()
     port = free_port(PORT)
     threading.Timer(0.8, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    run_server(port)

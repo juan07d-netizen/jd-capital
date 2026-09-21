@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 
 def fresh_env(monkeypatch):
@@ -187,3 +190,76 @@ def test_reject_oversized_withdrawal_and_unsafe_source_url(monkeypatch):
     else:
         raise AssertionError("El sistema aceptó una URL no segura")
     assert metrics()["balance"] == 1.00
+
+
+def test_gui_server_logging_never_uses_standard_streams(monkeypatch):
+    root = fresh_env(monkeypatch)
+    import main
+
+    called = {}
+
+    def fake_run(*args, **kwargs):
+        called["args"] = args
+        called["kwargs"] = kwargs
+
+    monkeypatch.setattr(main.uvicorn, "run", fake_run)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+
+    main.configure_logging()
+    main.run_server(8123)
+
+    assert called["args"] == (main.app,)
+    assert called["kwargs"] == {
+        "host": "127.0.0.1",
+        "port": 8123,
+        "log_level": "warning",
+        "log_config": None,
+        "access_log": False,
+    }
+    assert (root / "jd_capital.log").exists()
+
+
+def test_research_without_api_key_is_controlled(monkeypatch):
+    fresh_env(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    from jd_capital.ai import AIConfigError, run_research
+
+    with pytest.raises(AIConfigError, match="clave de OpenAI"):
+        run_research("Prueba sin credenciales")
+
+
+def test_keyring_credentials_are_used_when_environment_is_empty(monkeypatch):
+    fresh_env(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    values = {}
+
+    class FakeKeyring:
+        @staticmethod
+        def get_password(service, account):
+            return values.get((service, account))
+
+        @staticmethod
+        def set_password(service, account, value):
+            values[(service, account)] = value
+
+        @staticmethod
+        def delete_password(service, account):
+            values.pop((service, account), None)
+
+    monkeypatch.setitem(sys.modules, "keyring", FakeKeyring)
+    from jd_capital.credentials import delete_openai_api_key, get_openai_api_key, set_openai_api_key
+
+    set_openai_api_key("test-keyring-key")
+    assert get_openai_api_key() == "test-keyring-key"
+    delete_openai_api_key()
+    assert get_openai_api_key() == ""
+
+
+def test_windows_default_data_directory_uses_localappdata(monkeypatch):
+    root = Path(tempfile.mkdtemp(prefix="jdc_localappdata_"))
+    monkeypatch.delenv("JD_DATA_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(root))
+    from jd_capital.config import default_data_dir
+
+    assert default_data_dir() == root / "JD Capital"

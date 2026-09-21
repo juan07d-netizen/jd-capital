@@ -1,9 +1,9 @@
 JD CAPITAL 2.1
 
-ESTADO ACTUAL: núcleo validado; instalador Windows pendiente de build en Windows.
+ESTADO ACTUAL: núcleo validado; el instalador Windows debe construirse y validarse en Windows antes de entregarse.
 
 Qué ya está validado aquí:
-- 7 pruebas automáticas pasan.
+- 12 pruebas automáticas cubren el núcleo; el build/instalador requiere su smoke test propio.
 - Migración de bases legacy verificada e idempotente.
 - Login y API local verificados.
 - Movimientos en centavos de USD verificados.
