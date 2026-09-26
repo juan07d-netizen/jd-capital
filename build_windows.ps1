@@ -25,6 +25,7 @@ Invoke-Native { & $VenvPython -m pip install -r requirements.lock } 'La instalac
 if (Test-Path build) { Remove-Item build -Recurse -Force }
 if (Test-Path dist) { Remove-Item dist -Recurse -Force }
 Invoke-Native { & $VenvPython -m PyInstaller --noconfirm --clean --onedir --windowed --name JD-Capital `
+    --add-data "jd_capital\web;jd_capital\web" `
     --collect-submodules keyring.backends `
     --collect-all keyring `
     --collect-all argon2 `

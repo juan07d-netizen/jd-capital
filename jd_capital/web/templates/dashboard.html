@@ -1,0 +1,21 @@
+<div class="wrap">
+ <div class="top"><div><div class="muted">PRIVATE WEALTH SYSTEM · v__APP_VERSION__</div><h1>JD Capital</h1></div><form method="post" action="/logout"><button class="secondary logout">Cerrar sesión</button></form></div>
+ <div class="grid">
+  <div class="card"><div class="muted">Dinero disponible</div><div class="metric" id="balance">USD 0.00</div></div>
+  <div class="card"><div class="muted">Ingresos</div><div class="metric" id="income">USD 0.00</div></div>
+  <div class="card"><div class="muted">Gastos</div><div class="metric" id="expense">USD 0.00</div></div>
+  <div class="card"><div class="muted">Resultado neto</div><div class="metric" id="net">USD 0.00</div></div>
+ </div>
+ <div class="card"><h2>Motor de investigación</h2><p class="muted">Investiga en la web en segundo plano y guarda el resultado. Un fallo de la IA no cierra JD Capital.</p>
+ <textarea id="mission">__DEFAULT_MISSION__</textarea><button id="runMissionButton">▶ Ejecutar investigación</button><div id="out" class="status mission-status">Esperando una investigación.</div></div>
+ <div class="card"><h2>Conexión IA</h2><div class="status" id="keyStatus">__OPENAI_STATUS__</div>
+ <input id="apiKey" type="password" placeholder="Pegá aquí tu clave de API de OpenAI (no se muestra luego)"><div class="cols">
+ <button id="saveKeyButton">Guardar clave</button><button id="removeKeyButton" class="secondary">Eliminar clave</button></div>
+ <p class="muted">La clave se guarda en el almacén de credenciales del sistema operativo; no se escribe en el historial de investigaciones.</p></div>
+ <div class="cols">
+  <div class="card"><h2>Movimientos</h2><select id="kind"><option value="deposit">Ingresar capital</option><option value="income">Registrar ganancia</option><option value="expense">Registrar gasto</option><option value="withdrawal">Retirar</option></select><input id="amount" type="number" step="0.01" min="0.01" placeholder="USD"><input id="note" placeholder="Concepto"><button id="saveTransactionButton">Guardar movimiento</button><div id="txs"></div></div>
+  <div class="card"><h2>Oportunidades</h2><input id="oname" placeholder="Nombre"><input id="platform" placeholder="Plataforma"><select id="ostatus"><option>investigar</option><option>validar</option><option>activa</option><option>descartada</option></select><input id="expected" type="number" step="0.01" min="0" placeholder="USD esperados (opcional)"><input id="source_url" placeholder="URL fuente (opcional)"><input id="onote" placeholder="Nota"><button id="saveOpportunityButton">Guardar oportunidad</button><div id="opps"></div></div>
+ </div>
+ <div class="card"><h2>Historial de investigaciones</h2><div id="hist">Cargando...</div></div>
+</div>
+<script>__DASHBOARD_SCRIPT__</script>

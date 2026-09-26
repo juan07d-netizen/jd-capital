@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -32,14 +33,14 @@ def test_first_run_and_persistence(monkeypatch):
     add_opportunity("Test", "Plataforma", "investigar", "2.50", "nota")
     job_id = create_job("Misión de prueba")
 
-    assert metrics() == {"balance": 1.50, "income": 1.75, "expense": 0.25, "net": 1.50}
+    assert metrics() == {"balance": Decimal("1.50"), "income": Decimal("1.75"), "expense": Decimal("0.25"), "net": Decimal("1.50")}
     assert verify_password(__import__("jd_capital.db", fromlist=["get_user"]).get_user("juan")["password_hash"], "123456789012")
     assert job_id == 1
     assert (root / "jd_capital.sqlite3").exists()
 
     # Simulate restart by calling init_db again and reading all records.
     init_db()
-    assert metrics()["balance"] == 1.50
+    assert metrics()["balance"] == Decimal("1.50")
 
 
 def test_legacy_migration(monkeypatch):
@@ -60,10 +61,14 @@ def test_legacy_migration(monkeypatch):
 
     from jd_capital.db import init_db, metrics, list_opportunities, get_job, list_runs
     init_db()
-    assert metrics()["balance"] == 1.23
-    assert list_opportunities()[0]["expected_usd"] == 2.5
+    assert metrics()["balance"] == Decimal("1.23")
+    assert list_opportunities()[0]["expected_usd"] == Decimal("2.50")
     assert "updated_at" in get_job(1)
     assert "job_id" in list_runs()[0]
+    con = sqlite3.connect(db_file)
+    assert con.execute("SELECT amount FROM transactions_v1_archive WHERE id=1").fetchone()[0] == 1.23
+    assert con.execute("SELECT expected_usd FROM opportunities_v1_archive WHERE id=1").fetchone()[0] == 2.50
+    con.close()
 
 
 def test_http_login_and_api(monkeypatch):
@@ -83,9 +88,12 @@ def test_http_login_and_api(monkeypatch):
         good = client.post("/login", data={"username": "juan", "password": "123456789012"}, follow_redirects=False)
         assert good.status_code == 303
         assert client.get("/api/metrics").status_code == 200
-        created = client.post("/api/transactions", json={"kind": "deposit", "amount": "1.00", "note": "test"})
+        headers = {"idempotency-key": "http-transaction-1"}
+        created = client.post("/api/transactions", json={"kind": "deposit", "amount": "1.00", "note": "test"}, headers=headers)
         assert created.status_code == 200
-        assert client.get("/api/metrics").json()["balance"] == 1.00
+        repeated = client.post("/api/transactions", json={"kind": "deposit", "amount": "1.00", "note": "test"}, headers=headers)
+        assert repeated.status_code == 200
+        assert client.get("/api/metrics").json()["balance"] == "1.00"
 
 
 def test_openai_background_web_search_contract(monkeypatch):
@@ -154,7 +162,7 @@ def test_migration_is_idempotent(monkeypatch):
     add_transaction("deposit", "0.01", "centavo")
     init_db()
     init_db()
-    assert metrics()["balance"] == 0.01
+    assert metrics()["balance"] == Decimal("0.01")
 
 
 def test_restart_recovery_with_provider_id(monkeypatch):
@@ -174,6 +182,29 @@ def test_restart_recovery_with_provider_id(monkeypatch):
     assert list_runs()[0]["status"] == "success"
 
 
+def test_research_engine_accepts_replaceable_provider_without_openai(monkeypatch):
+    fresh_env(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    from jd_capital.db import create_job, get_job, init_db
+    from jd_capital.engine import execute_job
+
+    class FreeProvider:
+        def start(self, mission):
+            assert mission == "provider desacoplado"
+            return "queued", "free-provider-1"
+
+        def poll(self, response_id):
+            assert response_id == "free-provider-1"
+            return "resultado independiente de OpenAI"
+
+    init_db()
+    job_id = create_job("provider desacoplado")
+    execute_job(job_id, "provider desacoplado", provider=FreeProvider())
+    job = get_job(job_id)
+    assert job["status"] == "success"
+    assert job["result"] == "resultado independiente de OpenAI"
+
+
 def test_reject_oversized_withdrawal_and_unsafe_source_url(monkeypatch):
     fresh_env(monkeypatch)
     from jd_capital.db import init_db, add_transaction, add_opportunity, metrics
@@ -191,7 +222,7 @@ def test_reject_oversized_withdrawal_and_unsafe_source_url(monkeypatch):
         assert "http://" in str(exc)
     else:
         raise AssertionError("El sistema aceptó una URL no segura")
-    assert metrics()["balance"] == 1.00
+    assert metrics()["balance"] == Decimal("1.00")
 
 
 def test_gui_server_logging_never_uses_standard_streams(monkeypatch):
@@ -278,7 +309,7 @@ def run_dashboard_javascript(monkeypatch) -> dict:
 const fs = require('fs');
 const source = fs.readFileSync(0, 'utf8');
 const elements = {};
-global.document = {getElementById(id) { return elements[id] ||= {value: '', textContent: '', innerHTML: '', className: ''}; }};
+global.document = {getElementById(id) { return elements[id] ||= {value: '', textContent: '', innerHTML: '', className: '', disabled: false, addEventListener() {}}; }};
 const responses = {
   '/api/metrics': {balance: 0, income: 0, expense: 0, net: 0},
   '/api/transactions': {transactions: []},
@@ -288,7 +319,7 @@ const responses = {
 };
 const posts = [];
 global.fetch = async (url, opts = {}) => {
-  if (opts.method === 'POST') posts.push({url, body: JSON.parse(opts.body)});
+  if (opts.method === 'POST') posts.push({url, body: JSON.parse(opts.body), headers: opts.headers || {}});
   return {ok: true, json: async () => responses[url] || {ok: true}};
 };
 const alerts = [];
@@ -298,7 +329,7 @@ eval(source + '\nglobal.tx = tx; global.opp = opp;');
   await new Promise(resolve => setImmediate(resolve));
   const element = id => document.getElementById(id);
   element('kind').value = 'deposit'; element('amount').value = '1'; element('note').value = 'Prueba inicial';
-  await global.tx();
+  await Promise.all([global.tx(), global.tx()]);
   element('oname').value = 'Prueba'; element('platform').value = 'Test'; element('ostatus').value = 'investigar';
   element('expected').value = '1'; element('source_url').value = ''; element('onote').value = 'Prueba inicial';
   await global.opp();
@@ -320,6 +351,8 @@ def test_transaction_form_javascript_posts_entered_values(monkeypatch):
     result = run_dashboard_javascript(monkeypatch)
     transaction = next(item for item in result["posts"] if item["url"] == "/api/transactions")
     assert transaction["body"] == {"kind": "deposit", "amount": "1", "note": "Prueba inicial"}
+    assert transaction["headers"]["idempotency-key"]
+    assert len([item for item in result["posts"] if item["url"] == "/api/transactions"]) == 1
     assert result["alerts"] == []
 
 
@@ -335,3 +368,14 @@ def test_opportunity_form_javascript_posts_entered_values(monkeypatch):
         "source_url": "",
     }
     assert result["alerts"] == []
+
+
+def test_dashboard_critical_actions_are_external_and_event_bound(monkeypatch):
+    fresh_env(monkeypatch)
+    from jd_capital import app as app_module
+
+    monkeypatch.setattr(app_module, "get_openai_api_key", lambda: "")
+    rendered = app_module.dashboard()
+    assert "onclick=" not in rendered
+    assert "saveTransactionButton').addEventListener('click', tx)" in rendered
+    assert "saveOpportunityButton').addEventListener('click', opp)" in rendered

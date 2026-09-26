@@ -3,35 +3,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
 
-from .config import DATABASE_URL, get_db_file
+from .config import DATABASE_URL
+from .persistence.database import connect_sqlite as _connect_sqlite
+from .persistence.database import execute as _execute
+from .persistence.database import is_postgres as _is_postgres
+from .persistence.database import query as _query
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _sqlite_path() -> Path:
-    path = Path(get_db_file())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _connect_sqlite() -> sqlite3.Connection:
-    con = sqlite3.connect(_sqlite_path(), timeout=30, check_same_thread=False)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA foreign_keys=ON")
-    return con
-
-
-def _is_postgres() -> bool:
-    return DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 
 def init_db() -> None:
@@ -105,6 +90,9 @@ def _init_sqlite() -> None:
                 job_id INTEGER
             )"""
         )
+        from .persistence.migrations.financial_v1 import apply as apply_financial_v1
+
+        apply_financial_v1(con)
         con.execute(
             "INSERT INTO app_meta(key,value) VALUES('schema_version',?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -147,7 +135,10 @@ def _migrate_transactions(con: sqlite3.Connection) -> None:
         if cents > 0 and row[2] in ('income','expense','deposit','withdrawal'):
             con.execute('INSERT INTO transactions(id,created_at,kind,amount_cents,note) VALUES(?,?,?,?,?)',
                          (row[0], row[1], row[2], cents, row[4] or ''))
-    con.execute('DROP TABLE transactions_legacy')
+    # Keep the original rows as an immutable migration archive. This preserves
+    # exact legacy values even when an old row cannot satisfy the normalized
+    # v2 constraints; no balance is invented to compensate for bad input.
+    con.execute('ALTER TABLE transactions_legacy RENAME TO transactions_v1_archive')
 
 
 def _migrate_opportunities(con: sqlite3.Connection) -> None:
@@ -172,7 +163,7 @@ def _migrate_opportunities(con: sqlite3.Connection) -> None:
                 cents = 0
             con.execute('INSERT INTO opportunities(id,created_at,name,platform,status,expected_usd_cents,note,source_url) VALUES(?,?,?,?,?,?,?,?)',
                          (row[0],row[1],row[2],row[3] or '',row[4] or 'investigar',max(0,cents),row[6] or '', ''))
-        con.execute('DROP TABLE opportunities_legacy')
+        con.execute('ALTER TABLE opportunities_legacy RENAME TO opportunities_v1_archive')
     else:
         cols = _table_columns(con, 'opportunities')
         if 'source_url' not in cols:
@@ -280,39 +271,78 @@ def get_user(username: str) -> dict[str, Any] | None:
     return _row_dict(rows[0]) if rows else None
 
 
-def add_transaction(kind: str, amount: Any, note: str) -> None:
+def add_transaction(kind: str, amount: Any, note: str, idempotency_key: str | None = None) -> None:
     if kind not in ("income", "expense", "deposit", "withdrawal"):
         raise ValueError("Tipo de movimiento inválido")
-    cents = _to_cents(amount)
     note = (note or "").strip()
-    if kind == "withdrawal":
-        current = metrics()["balance"]
-        if cents > int(round(current * 100)):
-            raise ValueError("El retiro supera el saldo disponible de JD Capital.")
-    _execute(
-        "INSERT INTO transactions(created_at,kind,amount_cents,note) VALUES(?,?,?,?)",
-        (utc_now(), kind, cents, note),
-    )
+    if _is_postgres():
+        cents = _to_cents(amount)
+        if kind == "withdrawal":
+            current = metrics()["balance"]
+            if cents > int(current * Decimal(100)):
+                raise ValueError("El retiro supera el saldo disponible de JD Capital.")
+        _execute("INSERT INTO transactions(created_at,kind,amount_cents,note) VALUES(?,?,?,?)", (utc_now(), kind, cents, note))
+        return
+    from .financial.services import FinancialService, generated_idempotency_key
+
+    service = FinancialService()
+    cash = service.create_account("REAL", "Legacy cash (unspecified)", "cash", provider="legacy", allow_negative=False)
+    equity = service.get_or_create_system_account("REAL", "Legacy owner equity", "owner_equity")
+    revenue = service.get_or_create_system_account("REAL", "Legacy generated revenue", "revenue")
+    expense_account = service.get_or_create_system_account("REAL", "Legacy operating expense", "expense")
+    key = idempotency_key or generated_idempotency_key("compatibility")
+    if kind == "deposit":
+        service.owner_contribution("REAL", cash, equity, amount, key, note)
+    elif kind == "income":
+        service.income("REAL", cash, revenue, amount, key, note)
+    elif kind == "expense":
+        service.expense("REAL", cash, expense_account, amount, key, note)
+    else:
+        try:
+            service.personal_withdrawal("REAL", cash, equity, amount, key, note)
+        except ValueError as exc:
+            if "saldo disponible" in str(exc):
+                raise ValueError("El retiro supera el saldo disponible de JD Capital.") from exc
+            raise
 
 
 def list_transactions(limit: int = 100) -> list[dict[str, Any]]:
+    if not _is_postgres():
+        from .financial.services import FinancialService
+
+        kind_map = {"owner_contribution": "deposit", "personal_withdrawal": "withdrawal"}
+        output = []
+        for transaction in FinancialService().list_transactions("REAL", limit):
+            first = transaction["entries"][0]
+            output.append({
+                "created_at": transaction["effective_at"],
+                "kind": kind_map.get(transaction["type"], transaction["type"]),
+                "amount": abs(Decimal(first["amount"])),
+                "note": transaction["description"],
+            })
+        return output
     rows = _query(
         "SELECT created_at,kind,amount_cents,note FROM transactions ORDER BY id DESC LIMIT ?",
         (max(1, min(int(limit), 500)),),
     )
-    return [{**_row_dict(r), "amount": r["amount_cents"] / 100.0} for r in rows]
+    return [{**_row_dict(r), "amount": Decimal(r["amount_cents"]) / Decimal(100)} for r in rows]
 
 
-def metrics() -> dict[str, float]:
+def metrics() -> dict[str, Decimal]:
+    if not _is_postgres():
+        from .financial.services import FinancialService
+
+        exact = FinancialService().compatibility_metrics("REAL")
+        return {key: Decimal(value) for key, value in exact.items()}
     rows = _query("SELECT kind,COALESCE(SUM(amount_cents),0) total FROM transactions GROUP BY kind")
     totals = {r["kind"]: int(r["total"] or 0) for r in rows}
     income = totals.get("income", 0) + totals.get("deposit", 0)
     expense = totals.get("expense", 0) + totals.get("withdrawal", 0)
     return {
-        "balance": round((income - expense) / 100.0, 2),
-        "income": round(income / 100.0, 2),
-        "expense": round(expense / 100.0, 2),
-        "net": round((income - expense) / 100.0, 2),
+        "balance": Decimal(income - expense) / Decimal(100),
+        "income": Decimal(income) / Decimal(100),
+        "expense": Decimal(expense) / Decimal(100),
+        "net": Decimal(income - expense) / Decimal(100),
     }
 
 
@@ -345,7 +375,7 @@ def list_opportunities(limit: int = 100) -> list[dict[str, Any]]:
     out = []
     for r in rows:
         d = _row_dict(r)
-        d["expected_usd"] = d.pop("expected_usd_cents") / 100.0
+        d["expected_usd"] = Decimal(d.pop("expected_usd_cents")) / Decimal(100)
         out.append(d)
     return out
 
@@ -398,33 +428,3 @@ def _row_dict(row: Any) -> dict[str, Any]:
     if isinstance(row, dict):
         return dict(row)
     return dict(zip(row.keys(), row)) if hasattr(row, 'keys') else dict(row)
-
-
-def _query(sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
-    if _is_postgres():
-        import psycopg
-        with psycopg.connect(DATABASE_URL) as con:
-            with con.cursor() as cur:
-                cur.execute(sql.replace("?", "%s"), params)
-                cols = [d.name for d in cur.description] if cur.description else []
-                return [dict(zip(cols, row)) for row in cur.fetchall()] if cols else []
-    con = _connect_sqlite()
-    try:
-        return con.execute(sql, params).fetchall()
-    finally:
-        con.close()
-
-
-def _execute(sql: str, params: tuple[Any, ...] = ()) -> None:
-    if _is_postgres():
-        import psycopg
-        with psycopg.connect(DATABASE_URL) as con:
-            with con.cursor() as cur:
-                cur.execute(sql.replace("?", "%s"), params)
-        return
-    con = _connect_sqlite()
-    try:
-        con.execute(sql, params)
-        con.commit()
-    finally:
-        con.close()
